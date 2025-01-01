@@ -8,52 +8,52 @@ from tempfile import NamedTemporaryFile
 import os
 from datetime import datetime
 
-
-model = load_model('Suspicious_Human_Activity_Detection_LRCN_Model.h5')
+# Load the pre-trained model
+anomaly_model = load_model('Suspicious_Human_Activity_Detection_LRCN_Model.h5')
 
 # Twilio configuration
-account_sid = 'AC4e7eb78b90d176256ebfd74b912314ff'
-auth_token = '7666260ba3947ddf32458015571359b0'
-twilio_number = '+16095282776'
-recipient_number = '+917989665270'
+twilio_account_sid = 'AC4e7eb78b90d176256ebfd74b912314ff'
+twilio_auth_token = '7666260ba3947ddf32458015571359b0'
+twilio_sender_number = '+16095282776'
+twilio_recipient_number = '+917989665270'
 
-client = Client(account_sid, auth_token)
+twilio_client = Client(twilio_account_sid, twilio_auth_token)
 
-def get_location():
-    g = geocoder.ip('me')
-    location = g.latlng
-    if location:
-        place = geocoder.osm(location, method='reverse')
-        if place and place.address:
-            return place.address
+def get_current_location():
+    geo_info = geocoder.ip('me')
+    coordinates = geo_info.latlng
+    if coordinates:
+        detailed_location = geocoder.osm(coordinates, method='reverse')
+        if detailed_location and detailed_location.address:
+            return detailed_location.address
         else:
-            return f"Location identified with coordinates (latitude, longitude): {location}. Address details are currently unavailable."
+            return f"Coordinates: {coordinates}. Detailed address unavailable."
     else:
-        return "Location not available"
+        return "Unable to determine location."
 
-def send_alert():
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    location = get_location()
-    message_body = f"Alert: Suspicious activity has been detected in the monitored area. Location: {location}. Time of detection: {timestamp}. Please review immediately."
-    message = client.messages.create(
-        body=message_body,
-        from_=twilio_number,
-        to=recipient_number
+def send_alert_notification():
+    detection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    location_info = get_current_location()
+    alert_message = (f"ALERT: Suspicious activity detected! Location: {location_info}. "
+                     f"Detection time: {detection_time}. Please take immediate action.")
+    message = twilio_client.messages.create(
+        body=alert_message,
+        from_=twilio_sender_number,
+        to=twilio_recipient_number
     )
-    st.write(f"Alert successfully sent to +917989XXXXX with detected location: {location}.")
+    st.write(f"Alert sent successfully to {twilio_recipient_number}.")
 
-def preprocess_frame(frame):
-    IMG_HEIGHT = 224
-    IMG_WIDTH = 224
-    frame = cv2.resize(frame, (IMG_WIDTH, IMG_HEIGHT))
-    frame = frame / 255.0
-    return np.expand_dims(frame, axis=0)
+def preprocess_video_frame(frame):
+    target_height, target_width = 224, 224
+    resized_frame = cv2.resize(frame, (target_width, target_height))
+    normalized_frame = resized_frame / 255.0
+    return np.expand_dims(normalized_frame, axis=0)
 
 st.markdown(
     """
     <style>
     .title {
-        color: #FF5733; /* Choose your desired color */
+        color: #FF5733;
         font-size: 3em;
         font-weight: bold;
         text-align: center;
@@ -66,116 +66,103 @@ st.markdown('<p class="title">VisionGuard: Detecting Anomalies, Securing Lives</
 st.title('VisionGuard: Detecting Anomalies, Securing Lives')
 
 # Initialize session state
-if 'processing_done' not in st.session_state:
-    st.session_state.processing_done = False
+if 'is_processed' not in st.session_state:
+    st.session_state.is_processed = False
 
-if 'temp_file_path' not in st.session_state:
-    st.session_state.temp_file_path = None
+if 'temp_video_path' not in st.session_state:
+    st.session_state.temp_video_path = None
 
-if 'crime_detected' not in st.session_state:
-    st.session_state.crime_detected = False
+if 'is_crime_detected' not in st.session_state:
+    st.session_state.is_crime_detected = False
 
-if 'video_filename' not in st.session_state:
-    st.session_state.video_filename = None
+if 'output_video_filename' not in st.session_state:
+    st.session_state.output_video_filename = None
 
-if 'out' not in st.session_state:
-    st.session_state.out = None
+if 'video_writer' not in st.session_state:
+    st.session_state.video_writer = None
 
-def clear_history():
-    st.session_state.processing_done = False
-    st.session_state.crime_detected = False
-    if st.session_state.temp_file_path:
-        if os.path.exists(st.session_state.temp_file_path):
-            os.remove(st.session_state.temp_file_path)
-        st.session_state.temp_file_path = None
-    if st.session_state.video_filename:
-        if os.path.exists(st.session_state.video_filename):
-            os.remove(st.session_state.video_filename)
-        st.session_state.video_filename = None
-    if st.session_state.out:
-        st.session_state.out.release()
-        st.session_state.out = None
-    st.write("History cleared.")
+def reset_session_state():
+    st.session_state.is_processed = False
+    st.session_state.is_crime_detected = False
+    if st.session_state.temp_video_path:
+        if os.path.exists(st.session_state.temp_video_path):
+            os.remove(st.session_state.temp_video_path)
+        st.session_state.temp_video_path = None
+    if st.session_state.output_video_filename:
+        if os.path.exists(st.session_state.output_video_filename):
+            os.remove(st.session_state.output_video_filename)
+        st.session_state.output_video_filename = None
+    if st.session_state.video_writer:
+        st.session_state.video_writer.release()
+        st.session_state.video_writer = None
+    st.write("Session reset and history cleared.")
 
-uploaded_file = st.file_uploader("Choose a video file", type=['mp4'])
+uploaded_video = st.file_uploader("Upload a video file for analysis", type=['mp4'])
 
-if uploaded_file and not st.session_state.processing_done:
+if uploaded_video and not st.session_state.is_processed:
+    with NamedTemporaryFile(delete=False, suffix='.mp4') as temp_video:
+        temp_video.write(uploaded_video.read())
+        st.session_state.temp_video_path = temp_video.name
 
-    with NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
-        temp_file.write(uploaded_file.read())
-        st.session_state.temp_file_path = temp_file.name
+    video_capture = cv2.VideoCapture(st.session_state.temp_video_path)
 
-    cap = cv2.VideoCapture(st.session_state.temp_file_path)
+    video_width = int(video_capture.get(3))
+    video_height = int(video_capture.get(4))
+    video_fps = video_capture.get(cv2.CAP_PROP_FPS)
 
-    frame_width = int(cap.get(3))
-    frame_height = int(cap.get(4))
-    fps = cap.get(cv2.CAP_PROP_FPS)
+    video_codec = cv2.VideoWriter_fourcc(*'XVID')
 
+    display_frame = st.empty()
 
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    crime_frame_counter = 0
+    is_alert_sent = False
 
-    stframe = st.empty()
-
-    crime_counter = 0
-    alert_sent = False
-
-    
-    #st.session_state.video_filename = 'normal_detection.avi'
-
-    while cap.isOpened():
-        ret, frame = cap.read()
+    while video_capture.isOpened():
+        ret, video_frame = video_capture.read()
         if not ret:
             break
 
-        
-        processed_frame = preprocess_frame(frame)
-        prediction = model.predict(processed_frame)
+        processed_frame = preprocess_video_frame(video_frame)
+        predictions = anomaly_model.predict(processed_frame)
 
-        crime_prob = prediction[0][0]
-        weapon_prob = prediction[0][1]
+        crime_probability = predictions[0][0]
+        weapon_probability = predictions[0][1]
 
-        label = 'Normal Activity'
-        color = (0, 255, 0)
+        detection_label = 'Normal Activity'
+        bounding_box_color = (0, 255, 0)
 
-        if crime_prob > 0.5:
-            st.session_state.crime_detected = True
-            crime_counter += 1
-            if crime_counter == 5 and not alert_sent:
-                send_alert()
-                alert_sent = True
+        if crime_probability > 0.5:
+            st.session_state.is_crime_detected = True
+            crime_frame_counter += 1
 
-            if weapon_prob > 0.5:
-                label = 'Crime & Weapon Detected'
+            if crime_frame_counter == 5 and not is_alert_sent:
+                send_alert_notification()
+                is_alert_sent = True
+
+            if weapon_probability > 0.5:
+                detection_label = 'Crime & Weapon Detected'
             else:
-                label = 'Crime Detected'
-            color = (0, 0, 255)
+                detection_label = 'Crime Detected'
+            bounding_box_color = (0, 0, 255)
 
-        
-        cv2.putText(frame, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
+        cv2.putText(video_frame, detection_label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, bounding_box_color, 2, cv2.LINE_AA)
 
-        
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb_frame = cv2.cvtColor(video_frame, cv2.COLOR_BGR2RGB)
+        display_frame.image(rgb_frame, channels="RGB", use_column_width=True)
 
-        stframe.image(frame_rgb, channels="RGB", use_column_width=True)
+        if st.session_state.video_writer is None:
+            output_filename = 'crime_detected.avi' if st.session_state.is_crime_detected else 'normal_detection.avi'
+            st.session_state.output_video_filename = output_filename
+            st.session_state.video_writer = cv2.VideoWriter(output_filename, video_codec, video_fps, (video_width, video_height))
 
-       
-        if st.session_state.out is None:
-            
-            if st.session_state.crime_detected:
-                st.session_state.video_filename = 'crime_detected.avi'
-            else:
-                st.session_state.video_filename = 'normal_detection.avi'
-            
-            st.session_state.out = cv2.VideoWriter(st.session_state.video_filename, fourcc, fps, (frame_width, frame_height))
+        st.session_state.video_writer.write(video_frame)
 
-        st.session_state.out.write(frame)
+    video_capture.release()
+    if st.session_state.video_writer:
+        st.session_state.video_writer.release()
+    st.write("Video processing completed.")
+    st.session_state.is_processed = True
 
-    cap.release()
-    if st.session_state.out:
-        st.session_state.out.release()
-    st.write(f"Processing complete.")
-    st.session_state.processing_done = True
-
-if st.session_state.processing_done:
+if st.session_state.is_processed:
     if st.button('Clear History'):
-        clear_history()
+        reset_session_state()

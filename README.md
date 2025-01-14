@@ -53,7 +53,7 @@ VisionGuard is a real-time anomaly detection system designed to ensure public sa
 - **Voice Alerts**: Incorporate voice alerts along with text notifications for situations where immediate human intervention is necessary.
 
 ### Co-Owners
-- [Shruthika](https://github.com/Shruthika-s)
+- [Shruthika Sunku](https://github.com/Shruthika-s)
 - [Suhas Uppala](https://github.com/Suhas-Uppala)
 
 ## Acknowledgments
